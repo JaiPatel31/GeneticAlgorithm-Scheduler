@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 
 from ga.engine import run_genetic_algorithm
 from ga.schedule import Schedule
+from ga.fitness import compute_violations
 
 st.set_page_config(
     page_title="Genetic Algorithm Scheduler",
@@ -122,6 +123,10 @@ if run_button:
     # Download Best Schedule as CSV
     # -----------------------------------------------------------
     csv = best_schedule.to_dataframe().to_csv(index=False).encode("utf-8")
+
+    # Auto-save final schedule to the output directory
+    best_schedule.save_csv("output/best_schedule.csv")
+
     st.download_button(
         label="📥 Download Schedule as CSV",
         data=csv,
@@ -134,6 +139,37 @@ if run_button:
     # -----------------------------------------------------------
     with st.expander("📊 View Full Generation Metrics"):
         st.dataframe(df_history)
+    # FITNESS HISTORY CSV DOWNLOAD
+    hist_csv = df_history.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        label="📥 Download Fitness History CSV",
+        data=hist_csv,
+        file_name="fitness_history.csv",
+        mime="text/csv"
+    )
+
+    violations = compute_violations(best_schedule)
+
+    st.subheader("⚠️ Constraint Violations")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.write(f"**Room Conflicts:** {violations['room_conflicts']}")
+        st.write(f"**Room Too Small:** {violations['room_too_small']}")
+        st.write(f"**Room Too Big (>1.5x):** {violations['room_too_big_15']}")
+        st.write(f"**Room Too Big (>3x):** {violations['room_too_big_30']}")
+
+    with col2:
+        st.write(f"**Facilitator Overloads (>4):** {violations['facilitator_overload']}")
+        st.write(f"**Facilitator Underloads (<3):** {violations['facilitator_underload']}")
+        st.write(f"**Same-Time Facilitator Conflicts:** {violations['facilitator_same_time_conflict']}")
+        st.write(f"**SLA101A/B Same Slot Violations:** {violations['sla101_same_slot']}")
+        st.write(f"**SLA191A/B Same Slot Violations:** {violations['sla191_same_slot']}")
+        st.write(f"**SLA101 ↔ SLA191 Same Slot:** {violations['sla101_191_same_slot']}")
+        st.write(f"**SLA101 ↔ SLA191 Distance Issues:** {violations['sla101_191_distance_issue']}")
+        st.write(f"**SLA101 ↔ SLA191 One Hour Gap Count:** {violations['sla101_191_one_hour_gap']}")
+        st.write(f"**SLA101 ↔ SLA191 Consecutive Slot Count:** {violations['sla101_191_consecutive_ok']}")
 
 else:
     st.info("Configure parameters in the sidebar and click **Run Genetic Algorithm** to begin.")

@@ -219,20 +219,19 @@ def compute_schedule_fitness(schedule) -> float:
         # -------- Facilitator overall load ------------
         if fac is not None:
             total = fac_total_counts.get(fac, 0)
+
             # Overloaded facilitator
             if total > 4:
                 score -= 0.5
-            # Underused facilitator (except Tyler)
+
+            # Underused (<3)
             elif total < 3:
-                if fac != "Tyler":
-                    score -= 0.4
-                else:
-                    # Tyler exception:
-                    # *No penalty if he’s only required to oversee < 2 activities.
+                if fac == "Tyler":
+                    # Tyler exception: NO penalty ONLY if total <2
                     if total >= 2:
-                        # If Tyler has 2 but less than 3, you might choose to apply -0.4,
-                        # but the spec only explicitly exempts < 2. We'll treat 2 as OK.
-                        pass
+                        score -= 0.4  # Tyler teaching exactly 2 → penalty applies
+                else:
+                    score -= 0.4
 
         # -------- Special SLA101/SLA191 spacing rules ------------
         # To avoid double-counting, we only apply pair-based scores
@@ -259,3 +258,155 @@ def compute_schedule_fitness(schedule) -> float:
     # Store it on the schedule object as a convenience
     schedule.fitness = total_fitness
     return total_fitness
+# -----------------------------------------------------------
+# COMPLETE CONSTRAINT VIOLATION CHECKER (Matches Fitness Exactly)
+# -----------------------------------------------------------
+
+def compute_violations(schedule):
+    """
+    Returns a dictionary of violation counts that correspond exactly to
+    the rules used by the fitness function.
+
+    Includes:
+      - room conflicts
+      - room too small
+      - room too big (1.5x, 3x)
+      - facilitator overloads (>4)
+      - facilitator underloads (<3) with correct Tyler exception
+      - facilitator same-time conflicts (>1 in same time slot)
+      - SLA101A/B same-slot or correct spacing
+      - SLA191A/B same-slot or correct spacing
+      - SLA101 vs SLA191 spacing & distance penalties
+    """
+
+    assignments = schedule.assignments
+
+    # Counters
+    violations = {
+        "room_conflicts": 0,
+        "room_too_small": 0,
+        "room_too_big_15": 0,
+        "room_too_big_30": 0,
+        "facilitator_overload": 0,
+        "facilitator_underload": 0,
+        "facilitator_same_time_conflict": 0,
+        "sla101_same_slot": 0,
+        "sla191_same_slot": 0,
+        "sla101_191_same_slot": 0,
+        "sla101_191_distance_issue": 0,
+        "sla101_191_one_hour_gap": 0,
+        "sla101_191_consecutive_ok": 0,
+    }
+
+    # Precompute data for conflicts & loads
+    room_time_counts = {}
+    fac_time_counts = {}
+    fac_total = {}
+
+    # -----------------------------------------------------------
+    # PASS 1: Count things needed for violations
+    # -----------------------------------------------------------
+    for act, d in assignments.items():
+        room = d["room"]
+        time = d["time"]
+        fac = d["facilitator"]
+
+        # Room-time conflicts
+        key_rt = (room, time)
+        room_time_counts[key_rt] = room_time_counts.get(key_rt, 0) + 1
+
+        # Facilitator same-time load
+        key_ft = (fac, time)
+        fac_time_counts[key_ft] = fac_time_counts.get(key_ft, 0) + 1
+
+        # Facilitator total load
+        fac_total[fac] = fac_total.get(fac, 0) + 1
+
+        # Room size violations
+        expected = ACTIVITIES[act]["expected"]
+        capacity = ROOMS.get(room)
+
+        if capacity < expected:
+            violations["room_too_small"] += 1
+        else:
+            ratio = capacity / expected
+            if ratio > 3.0:
+                violations["room_too_big_30"] += 1
+            elif ratio > 1.5:
+                violations["room_too_big_15"] += 1
+
+    # -----------------------------------------------------------
+    # Room-time conflict count
+    # -----------------------------------------------------------
+    for (room, time), count in room_time_counts.items():
+        if count > 1:
+            violations["room_conflicts"] += (count - 1)
+
+    # -----------------------------------------------------------
+    # Facilitator overload/underload & same-time conflicts
+    # -----------------------------------------------------------
+    for fac, total in fac_total.items():
+
+        # Overload (>4)
+        if total > 4:
+            violations["facilitator_overload"] += 1
+
+        # Underload (<3)
+        if total < 3:
+            if fac == "Tyler":
+                # Tyler exception: no penalty ONLY if <2
+                if total >= 2:
+                    violations["facilitator_underload"] += 1
+            else:
+                violations["facilitator_underload"] += 1
+
+    for (fac, time), count in fac_time_counts.items():
+        if count > 1:
+            violations["facilitator_same_time_conflict"] += (count - 1)
+
+    # -----------------------------------------------------------
+    # SLA101A/B and SLA191A/B same-slot or spacing
+    # -----------------------------------------------------------
+    # 101 pair
+    t1 = assignments[PAIR_SLA101[0]]["time"]
+    t2 = assignments[PAIR_SLA101[1]]["time"]
+    if t1 == t2:
+        violations["sla101_same_slot"] += 1
+
+    # 191 pair
+    t3 = assignments[PAIR_SLA191[0]]["time"]
+    t4 = assignments[PAIR_SLA191[1]]["time"]
+    if t3 == t4:
+        violations["sla191_same_slot"] += 1
+
+    # -----------------------------------------------------------
+    # SLA101 ↔ SLA191 cross-pair rules
+    # -----------------------------------------------------------
+    for (a101, a191) in CROSS_101_191:
+        d101 = assignments[a101]
+        d191 = assignments[a191]
+
+        time101 = d101["time"]
+        time191 = d191["time"]
+        room101 = d101["room"]
+        room191 = d191["room"]
+
+        if time101 == time191:
+            violations["sla101_191_same_slot"] += 1
+            continue
+
+        diff = _time_diff_hours(time101, time191)
+
+        if diff == 1:
+            # Consecutive OK
+            violations["sla101_191_consecutive_ok"] += 1
+            # Check distance penalty
+            inA = _is_beach_or_roman(room101)
+            inB = _is_beach_or_roman(room191)
+            if inA ^ inB:
+                violations["sla101_191_distance_issue"] += 1
+
+        elif diff == 2:
+            violations["sla101_191_one_hour_gap"] += 1
+
+    return violations
