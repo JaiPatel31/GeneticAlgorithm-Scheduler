@@ -10,6 +10,10 @@ from ga.engine import run_genetic_algorithm
 from ga.schedule import Schedule
 from ga.fitness import compute_violations
 
+# Persistent GA results across UI interactions
+if "ga_results" not in st.session_state:
+    st.session_state.ga_results = None
+
 st.set_page_config(
     page_title="Genetic Algorithm Scheduler",
     layout="wide"
@@ -79,7 +83,7 @@ run_button = st.sidebar.button("🚀 Run Genetic Algorithm")
 
 if run_button:
     with st.spinner("Running Genetic Algorithm... This may take a moment."):
-        results = run_genetic_algorithm(
+        st.session_state.ga_results = run_genetic_algorithm(
             population_size=population_size,
             min_generations=min_generations,
             max_generations=max_generations,
@@ -88,12 +92,24 @@ if run_button:
             elitism_count=elitism_count
         )
 
-    best_schedule: Schedule = results["best_schedule"]
+
+# -----------------------------------------------------------
+# SHOW RESULTS (persistent)
+# -----------------------------------------------------------
+if st.session_state.ga_results is not None:
+
+    results = st.session_state.ga_results
+    best_schedule = results["best_schedule"]
     history = results["history"]
     generations_run = results["generations_run"]
 
-    # Convert history to DataFrame
     df_history = pd.DataFrame(history)
+
+    # Format improvement % nicely
+    if "improvement" in df_history.columns:
+        df_history["improvement"] = df_history["improvement"].apply(
+            lambda x: f"{x:.2f}%" if x is not None and not pd.isna(x) else "N/A"
+        )
 
     st.success(f"Genetic Algorithm completed in **{generations_run}** generations!")
 
@@ -117,14 +133,62 @@ if run_button:
     # Best Schedule Table
     # -----------------------------------------------------------
     st.subheader("🏆 Best Schedule (Final Generation)")
-    st.dataframe(best_schedule.to_dataframe(), use_container_width=True)
+
+    row_mode = st.radio(
+        "How many activities to show?",
+        ["First 6", "All"],
+        horizontal=True
+    )
+
+    sort_mode = st.radio(
+        "Sort Schedule By:",
+        ["Time", "Activity"],
+        horizontal=True
+    )
+
+    df = best_schedule.to_dataframe()
+
+    time_order = {
+        "10 AM": 10,
+        "11 AM": 11,
+        "12 PM": 12,
+        "1 PM": 13,
+        "2 PM": 14,
+        "3 PM": 15,
+    }
+
+    if sort_mode == "Time":
+        df["TimeSort"] = df["Time"].map(time_order)
+        df = df.sort_values(["TimeSort", "Activity"], ascending=[True, True]).drop(columns=["TimeSort"])
+    else:
+        df = df.sort_values("Activity")
+
+    df_display = df.head(6) if row_mode == "First 6" else df
+    st.dataframe(df_display, use_container_width=True)
 
     # -----------------------------------------------------------
-    # Download Best Schedule as CSV
+    # Optional: Group by Room / Facilitator
     # -----------------------------------------------------------
-    csv = best_schedule.to_dataframe().to_csv(index=False).encode("utf-8")
+    st.subheader("📚 Optional Groupings")
 
-    # Auto-save final schedule to the output directory
+    with st.expander("🏫 Group Activities by Room"):
+        grouped_room = df.groupby("Room")
+        for room, table in grouped_room:
+            st.markdown(f"### Room: **{room}**")
+            st.dataframe(table, use_container_width=True)
+
+    with st.expander("🧑‍🏫 Group Activities by Facilitator"):
+        grouped_fac = df.groupby("Facilitator")
+        for fac, table in grouped_fac:
+            st.markdown(f"### Facilitator: **{fac}**")
+            st.dataframe(table, use_container_width=True)
+
+    # -----------------------------------------------------------
+    # Downloads
+    # -----------------------------------------------------------
+    st.subheader("⬇️ Downloads")
+
+    csv = df.to_csv(index=False).encode("utf-8")
     best_schedule.save_csv("output/best_schedule.csv")
 
     st.download_button(
@@ -134,12 +198,9 @@ if run_button:
         mime="text/csv"
     )
 
-    # -----------------------------------------------------------
-    # Show history metrics as table
-    # -----------------------------------------------------------
     with st.expander("📊 View Full Generation Metrics"):
-        st.dataframe(df_history)
-    # FITNESS HISTORY CSV DOWNLOAD
+        st.dataframe(df_history, use_container_width=True)
+
     hist_csv = df_history.to_csv(index=False).encode("utf-8")
     st.download_button(
         label="📥 Download Fitness History CSV",
@@ -148,9 +209,12 @@ if run_button:
         mime="text/csv"
     )
 
-    violations = compute_violations(best_schedule)
-
+    # -----------------------------------------------------------
+    # Violations
+    # -----------------------------------------------------------
     st.subheader("⚠️ Constraint Violations")
+
+    violations = compute_violations(best_schedule)
 
     col1, col2 = st.columns(2)
 

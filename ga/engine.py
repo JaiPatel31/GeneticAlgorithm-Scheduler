@@ -85,9 +85,8 @@ def run_genetic_algorithm(
         if prev_avg is None:
             improvement = None
         else:
-            # Avoid division by zero
             denom = prev_avg if abs(prev_avg) > 1e-9 else 1e-9
-            improvement = (avg_f - prev_avg) / abs(denom)
+            improvement = ((avg_f - prev_avg) / abs(denom)) * 100.0  # <-- percent
 
         prev_avg = avg_f
 
@@ -113,7 +112,7 @@ def run_genetic_algorithm(
             # "You must run at least 100 generations but you must also
             #  continue until the improvement in average fitness per generation
             #  is less than 1%."
-            if improvement < 0.01:
+            if improvement < 1.0:  # < 1%
                 break
 
         # -----------------------------
